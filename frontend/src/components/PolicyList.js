@@ -62,16 +62,22 @@ function PolicyList() {
       }
       
       console.log('策略注册表合约:', contracts.policyRegistry);
+      console.log('合约地址:', await contracts.policyRegistry.getAddress());
 
-      // 获取策略数量
+      // 直接调用合约方法，避免safeContractCall的问题
       let policyCount;
       try {
-        // 使用safeContractCall辅助函数
-        policyCount = await safeContractCall(contracts.policyRegistry, 'getPolicyCount');
-        console.log('获取到的策略数量:', policyCount);
+        // 直接使用合约方法
+        policyCount = await contracts.policyRegistry.getPolicyCount();
+        console.log('获取到的策略数量原始值:', policyCount);
+        console.log('策略数量类型:', typeof policyCount, Object.prototype.toString.call(policyCount));
+        
+        // 确保policyCount是数字
+        policyCount = Number(policyCount);
+        console.log('转换后的策略数量:', policyCount);
       } catch (countErr) {
         console.error('调用getPolicyCount错误:', countErr);
-        console.log('假设策略数量为0，继续处理...');
+        console.log('获取策略数量失败，请检查合约连接状态');
         policyCount = 0;
       }
       
@@ -87,20 +93,20 @@ function PolicyList() {
       }
 
       // 获取所有策略数据
-      const policies = [];
+      const policiesData = [];
       
       for (let i = 0; i < count; i++) {
         try {
           console.log(`正在获取策略ID=${i}的信息...`);
           
-          // 使用safeContractCall辅助函数
-          const policy = await safeContractCall(contracts.policyRegistry, 'getPolicyInfo', [i]);
+          // 直接调用合约方法
+          const policy = await contracts.policyRegistry.getPolicyInfo(i);
           console.log(`策略ID=${i}的基本信息:`, policy);
           
           // 尝试获取策略条件ID列表
           let conditionIds = [];
           try {
-            const conditionIdsResult = await safeContractCall(contracts.policyRegistry, 'getPolicyConditionIds', [i]);
+            const conditionIdsResult = await contracts.policyRegistry.getPolicyConditionIds(i);
             conditionIds = Array.isArray(conditionIdsResult) ? 
               conditionIdsResult.map(id => Number(id)) : 
               [Number(conditionIdsResult)];
@@ -109,8 +115,8 @@ function PolicyList() {
             console.error(`获取策略ID=${i}的条件ID列表失败:`, condErr);
           }
           
-          // 构建完整的策略对象
-          policies.push({
+          // 构建完整的策略对象 - 确保处理所有字段
+          policiesData.push({
             id: i,
             policyId: Number(policy.policyId || i),
             name: policy.policyName || '',
@@ -126,8 +132,8 @@ function PolicyList() {
         }
       }
 
-      console.log('成功获取的策略:', policies);
-      setPolicies(policies);
+      console.log('成功获取的策略:', policiesData);
+      setPolicies(policiesData);
     } catch (err) {
       console.error('获取策略列表失败:', err);
       setError('获取策略列表失败：' + (err.message || '未知错误'));
@@ -158,8 +164,9 @@ function PolicyList() {
       // 确保policyId是数值类型
       const numericPolicyId = Number(policyId);
       
-      // 使用setPolicyStatus方法而不是togglePolicyStatus
-      const tx = await safeContractCall(contracts.policyRegistry, 'setPolicyStatus', [numericPolicyId, !currentStatus]);
+      // 直接调用合约方法，不使用safeContractCall
+      console.log('直接调用setPolicyStatus，参数:', numericPolicyId, !currentStatus);
+      const tx = await contracts.policyRegistry.setPolicyStatus(numericPolicyId, !currentStatus);
       console.log('交易已发送，等待确认...', tx.hash);
       await tx.wait();
       console.log('交易已确认');

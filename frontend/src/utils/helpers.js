@@ -106,14 +106,12 @@ export const getActionInfo = (action) => {
  */
 export const safeContractCall = async (contract, methodName, args = []) => {
   if (!contract) {
+    console.error('合约对象为空');
     throw new Error('合约对象为空');
   }
   
   console.log(`尝试调用合约方法: ${methodName}，参数:`, args);
-  console.log('合约对象类型:', typeof contract);
-  console.log('合约是否有getAddress方法:', typeof contract.getAddress === 'function');
-  console.log('合约是否有interface属性:', contract.interface !== undefined);
-
+  
   // 特殊处理特定方法
   const specialMethods = {
     'getPolicyCount': 0,  // 默认返回0个策略
@@ -128,24 +126,24 @@ export const safeContractCall = async (contract, methodName, args = []) => {
     'getPolicyConditionIds': []  // 默认返回空条件列表
   };
   
-  // 初始化阶段，如果检测到特殊方法，直接返回默认值
-  if (specialMethods.hasOwnProperty(methodName)) {
-    try {
-      // 先尝试通过地址验证合约是否存在
-      const contractAddress = await contract.getAddress();
-      console.log(`检测到特殊方法 ${methodName}，合约地址 ${contractAddress}`);
-      
-      if (contractAddress === '0x0000000000000000000000000000000000000000') {
-        console.log(`合约地址无效，返回默认值`);
-        return specialMethods[methodName];
-      }
-    } catch (error) {
-      console.warn(`特殊方法 ${methodName} 的合约地址验证失败，返回默认值:`, specialMethods[methodName]);
+  // 检查合约是否有getAddress方法和interface属性
+  const hasGetAddress = typeof contract.getAddress === 'function';
+  const hasInterface = contract.interface !== undefined;
+  
+  console.log('合约对象类型:', typeof contract);
+  console.log('合约是否有getAddress方法:', hasGetAddress);
+  console.log('合约是否有interface属性:', hasInterface);
+  
+  // 如果合约不完整，返回特殊方法的默认值
+  if (!hasGetAddress || !hasInterface) {
+    if (specialMethods.hasOwnProperty(methodName)) {
+      console.warn(`合约接口不完整，但为特殊方法 ${methodName} 返回默认值`);
       return specialMethods[methodName];
     }
+    throw new Error('合约接口不完整');
   }
-
-  // 先检查合约地址是否有效
+  
+  // 获取合约地址
   let contractAddress;
   try {
     contractAddress = await contract.getAddress();
@@ -153,162 +151,147 @@ export const safeContractCall = async (contract, methodName, args = []) => {
   } catch (error) {
     console.error('获取合约地址失败:', error);
     
-    // 对于特殊方法，返回默认值
     if (specialMethods.hasOwnProperty(methodName)) {
       console.warn(`合约地址无效，但为特殊方法 ${methodName} 返回默认值`);
       return specialMethods[methodName];
     }
-    
     throw new Error(`合约地址无效: ${error.message}`);
   }
   
-  // 检查ABI中是否存在该方法
-  let functionNames = [];
   try {
-    functionNames = Object.keys(contract.interface.functions);
-    console.log('合约可用方法:', functionNames);
-    
-    if (!functionNames.some(f => f.split('(')[0] === methodName)) {
-      console.warn(`警告: 方法 ${methodName} 在ABI中未找到，尝试其他解决方案`);
-      
-      // 对于特殊方法，返回默认值
-      if (specialMethods.hasOwnProperty(methodName)) {
-        console.warn(`ABI中未找到方法，但为特殊方法 ${methodName} 返回默认值`);
-        return specialMethods[methodName];
-      }
-    }
-  } catch (error) {
-    console.error('获取合约方法列表失败:', error);
-    
-    // 对于特殊方法，返回默认值
-    if (specialMethods.hasOwnProperty(methodName)) {
-      console.warn(`获取方法列表失败，但为特殊方法 ${methodName} 返回默认值`);
-      return specialMethods[methodName];
-    }
-  }
-  
-  // 尝试方法1: 使用getFunction
-  try {
-    const method = contract.getFunction(methodName);
-    if (method) {
-      const result = await method(...args);
-      console.log(`方法1成功 (${methodName})`, result);
-      return result;
-    }
-  } catch (error) {
-    console.error(`方法1失败 (${methodName})`, error);
-    
-    // 对于特殊方法，返回默认值
-    if (specialMethods.hasOwnProperty(methodName)) {
-      console.warn(`方法1解码失败，但为特殊方法 ${methodName} 返回默认值`);
-      return specialMethods[methodName];
-    }
-  }
-  
-  // 尝试方法2: 使用interface
-  try {
-    // 尝试找到匹配的函数签名 (支持重载函数)
-    const functionFragments = Object.values(contract.interface.functions)
-      .filter(f => f.name === methodName);
-    
-    if (functionFragments.length > 0) {
-      // 优先使用参数数量匹配的函数
-      const bestMatch = functionFragments.find(f => f.inputs.length === args.length) || 
-                       functionFragments[0];
-      
-      console.log(`找到匹配的函数签名: ${bestMatch.format()}`);
-      
-      const data = contract.interface.encodeFunctionData(bestMatch, args);
-      const provider = contract.runner?.provider || contract.provider;
-      
-      if (provider) {
-        try {
-          // 调用前检查provider状态
-          const network = await provider.getNetwork();
-          console.log(`当前网络: chainId=${network.chainId}`);
-        } catch (netError) {
-          console.error('网络检查失败:', netError);
-        }
-        
-        const result = await provider.call({
+    // 直接处理getPolicyCount方法，手动调用
+    if (methodName === 'getPolicyCount') {
+      try {
+        console.log('使用专门处理方式调用getPolicyCount...');
+        // 尝试直接调用
+        const callResult = await contract.runner.call({
           to: contractAddress,
-          data
+          data: contract.interface.encodeFunctionData('getPolicyCount', [])
         });
         
-        // 检查结果是否为空
-        if (result === '0x') {
-          console.warn(`警告: 合约返回空数据，可能是函数不存在或网络问题`);
-          
-          // 对于特殊方法，返回默认值
-          if (specialMethods.hasOwnProperty(methodName)) {
-            console.warn(`合约返回空数据，但为特殊方法 ${methodName} 返回默认值`);
-            return specialMethods[methodName];
-          }
+        // 尝试手动解码结果
+        if (callResult === '0x') {
+          console.log('getPolicyCount返回空值，默认为0');
+          return 0n; // 返回BigInt 0
         }
         
-        const decodedResult = contract.interface.decodeFunctionResult(bestMatch, result);
-        console.log(`方法2成功 (${methodName})`, decodedResult);
-        return decodedResult.length === 1 ? decodedResult[0] : decodedResult;
-      } else {
-        throw new Error('找不到合约的provider');
+        try {
+          // 尝试解码
+          const decodedResult = contract.interface.decodeFunctionResult('getPolicyCount', callResult);
+          console.log('getPolicyCount结果成功解码:', decodedResult);
+          return decodedResult[0]; // 通常结果在数组的第一个元素
+        } catch (decodeError) {
+          console.error('解码结果失败, 返回默认值0:', decodeError);
+          return 0n; // 返回BigInt 0
+        }
+      } catch (directError) {
+        console.error('直接调用getPolicyCount失败:', directError);
+        return 0n; // 失败时返回BigInt 0
       }
-    } else {
-      throw new Error(`找不到匹配的函数签名: ${methodName}`);
     }
-  } catch (error) {
-    console.error(`方法2失败 (${methodName})`, error);
     
-    // 对于特殊方法，返回默认值
-    if (specialMethods.hasOwnProperty(methodName)) {
-      console.warn(`方法2失败，但为特殊方法 ${methodName} 返回默认值`);
-      return specialMethods[methodName];
-    }
-  }
-  
-  // 尝试方法3: 直接属性访问 (一些老版本兼容)
-  try {
+    // 尝试直接调用合约方法 (使用ethers v6 API)
     if (typeof contract[methodName] === 'function') {
+      console.log(`直接调用方法: ${methodName}`);
       const result = await contract[methodName](...args);
-      console.log(`方法3成功 (${methodName})`, result);
+      console.log(`方法调用成功:`, result);
       return result;
-    }
-  } catch (error) {
-    console.error(`方法3失败 (${methodName})`, error);
-    
-    // 对于特殊方法，返回默认值
-    if (specialMethods.hasOwnProperty(methodName)) {
-      console.warn(`方法3失败，但为特殊方法 ${methodName} 返回默认值`);
-      return specialMethods[methodName];
-    }
-  }
-  
-  // 尝试方法4: 尝试找到类似的方法名
-  try {
-    const similarMethods = functionNames.filter(f => {
-      const name = f.split('(')[0];
-      return name.toLowerCase().includes(methodName.toLowerCase()) ||
-             methodName.toLowerCase().includes(name.toLowerCase());
-    });
-    
-    if (similarMethods.length > 0) {
-      console.log(`尝试使用相似的方法: ${similarMethods[0]}`);
-      const alternativeMethod = contract.getFunction(similarMethods[0]);
-      if (alternativeMethod) {
-        const result = await alternativeMethod(...args);
-        console.log(`相似方法调用成功 (${similarMethods[0]})`, result);
-        return result;
+    } else {
+      console.warn(`方法 ${methodName} 不是合约的直接函数`);
+      
+      // 尝试使用ethers v6的方式调用
+      if (typeof contract.getFunction === 'function') {
+        try {
+          const method = contract.getFunction(methodName);
+          console.log(`使用getFunction获取方法: ${methodName}`);
+          const result = await method(...args);
+          console.log(`方法调用成功:`, result);
+          return result;
+        } catch (getError) {
+          console.error(`getFunction调用失败:`, getError);
+        }
+      }
+      
+      // 最后尝试低级调用
+      if (contract.interface) {
+        try {
+          // 尝试编码函数调用
+          console.log(`尝试手动编码函数调用: ${methodName}`);
+          
+          // 获取provider
+          const provider = contract.runner?.provider || contract.provider;
+          if (!provider) {
+            throw new Error('找不到provider');
+          }
+          
+          // 尝试不同的签名格式编码函数调用
+          let data;
+          try {
+            data = contract.interface.encodeFunctionData(methodName, args);
+          } catch (encodeError) {
+            console.warn(`简单编码失败，尝试查找匹配函数:`, encodeError);
+            
+            // 尝试找到参数数量匹配的函数
+            const functions = Object.values(contract.interface.fragments || {})
+              .filter(f => f.name === methodName && f.inputs?.length === args.length);
+            
+            if (functions.length === 0) {
+              throw new Error(`找不到匹配的函数: ${methodName}`);
+            }
+            
+            data = contract.interface.encodeFunctionData(functions[0], args);
+          }
+          
+          // 发送调用
+          const result = await provider.call({
+            to: contractAddress,
+            data
+          });
+          
+          // 检查是否为空结果
+          if (result === '0x') {
+            if (specialMethods.hasOwnProperty(methodName)) {
+              console.warn(`收到空结果，为 ${methodName} 返回默认值`);
+              return specialMethods[methodName];
+            }
+            // 对于未指定默认值的方法，尝试根据返回类型提供合理默认值
+            return methodName.startsWith('get') ? 0n : null;
+          }
+          
+          // 尝试解码结果
+          try {
+            const decodedResult = contract.interface.decodeFunctionResult(methodName, result);
+            console.log(`低级调用成功:`, decodedResult);
+            return decodedResult.length === 1 ? decodedResult[0] : decodedResult;
+          } catch (decodeError) {
+            console.error(`解码结果失败:`, decodeError);
+            if (specialMethods.hasOwnProperty(methodName)) {
+              return specialMethods[methodName];
+            }
+            throw decodeError;
+          }
+        } catch (lowError) {
+          console.error(`低级调用失败:`, lowError);
+        }
       }
     }
+    
+    // 所有尝试都失败了，对于特殊方法返回默认值
+    if (specialMethods.hasOwnProperty(methodName)) {
+      console.warn(`所有尝试都失败，但为特殊方法 ${methodName} 返回默认值`);
+      return specialMethods[methodName];
+    }
+    
+    throw new Error(`无法调用合约方法: ${methodName}`);
   } catch (error) {
-    console.error('相似方法调用失败:', error);
+    console.error(`合约方法 ${methodName} 调用失败:`, error);
+    
+    // 对于特殊方法返回默认值
+    if (specialMethods.hasOwnProperty(methodName)) {
+      console.warn(`方法调用失败，但为特殊方法 ${methodName} 返回默认值`);
+      return specialMethods[methodName];
+    }
+    
+    throw error;
   }
-  
-  // 对于特殊方法，返回默认值
-  if (specialMethods.hasOwnProperty(methodName)) {
-    console.warn(`所有尝试都失败，但为特殊方法 ${methodName} 返回默认值`);
-    return specialMethods[methodName];
-  }
-  
-  // 所有方法都失败，抛出错误
-  throw new Error(`无法调用合约方法: ${methodName}`);
 }; 
